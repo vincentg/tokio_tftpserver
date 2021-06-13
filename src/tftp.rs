@@ -1,16 +1,20 @@
 pub mod TFTPProtocol {
    use std::io::Cursor;
+   use std::io::BufRead;
+   use std::io::Read;
    use byteorder::{BigEndian};
-   use byteorder::ReadBytesExt;
+   use byteorder::{ReadBytesExt,WriteBytesExt};
    use std::convert::TryFrom;
+   use std::fs::File;
+
 
 
    enum Opcode {
-       RRQ, // Read request
-       WRQ, // Write request
-       DATA,
-       ACK,
-       ERROR
+       RRQ = 1, // Read request
+       WRQ = 2, // Write request
+       DATA = 3,
+       ACK  = 4,
+       ERROR = 5
    }
 
    impl TryFrom<u16> for Opcode {
@@ -28,7 +32,7 @@ pub mod TFTPProtocol {
       }
    }
 
-   enum Command {
+   pub enum Command {
       RRQ  {filename : String, mode:String},
       WRQ  {filename : String, mode:String},
       DATA {blocknum : u16, data:Vec<u8>},
@@ -36,11 +40,23 @@ pub mod TFTPProtocol {
       ERROR {errorcode :u16, errmsg:String}
    }
 
-   fn parse_command(opcode: Opcode, reader: Cursor<&[u8]>) -> Command {
+   fn parse_command(opcode: Opcode, reader: &mut Cursor<&[u8]>) -> Command {
       match opcode {
          Opcode::RRQ => {
              println!("Read");
-             return Command::RRQ {filename:"XXX".to_string(),mode:"YYY".to_string()};
+             let mut _buffer = vec![0; 1024];
+             let _file_read = reader.read_until(0, &mut _buffer).unwrap();
+             // !! TODO See why resulting vector have zeros bytes !!
+             _buffer.retain(|&x| x != 0);
+             // Todo Manage Error
+             let _filename = String::from_utf8(_buffer).unwrap();
+             // First buffer was moved above, create buffer for Mode
+             let mut _mode_buf = vec![0; 254];
+             let _mode_read = reader.read_until(0, &mut _mode_buf).unwrap();
+             
+             let _mode = String::from_utf8(_mode_buf).unwrap();
+             println!("FileName: {}, Mode: {}",_filename, _mode);
+             return Command::RRQ {filename: _filename, mode: _mode};
          },
          Opcode::WRQ => {
             println!("Write");
@@ -55,15 +71,53 @@ pub mod TFTPProtocol {
 
    }
 
-   pub fn recv(buf: &[u8], size: usize) {
+   pub fn getReplyCommand(command: Command, filename:Option<String>) -> Option<Command> {
+      match command {
+         Command::RRQ { filename: _filename, mode: _mode } => {
+            return Some(PrepareData(_filename, 1, _mode));            
+         },
+         _ => {
+            println!("Not Implemented");
+            return None;
+         }
+      }
+      
+   }
+
+   fn PrepareData(filename :String, blocknum: u16, mode: String) -> Command {
+      // Todo manage error
+      println!("OPENING FILE: FileName: {} (len:{}), Mode: {}(len:{}), ",filename,filename.len(), mode, mode.len());
+      let mut f = File::open(filename).unwrap();
+      // TFTP Protocol define a max size of 512 bytes.
+      // First two bytes is the u16 chuck num
+      let mut writer = vec![0;516];
+      let mut cursorWriter = Cursor::new(writer);
+      // TODO SEE HOW TO DERIVE 3 from Opnum::DATA
+      cursorWriter.write_u16::<BigEndian>(3).unwrap();
+      cursorWriter.write_u16::<BigEndian>(blocknum).unwrap();
+      // Todo manage error 
+      // Todo SPEC GAP read from BlockNum*512
+      //let sz = f.read(&mut writer[4..]).unwrap();
+      let sz = f.read(&mut cursorWriter.get_mut()[4..]).unwrap();
+      // Check sz
+
+      return Command::DATA{blocknum: blocknum, data: cursorWriter.get_ref()[0..sz+4].to_vec()}
+   }
+
+   pub fn getBufferForCommand(command: Command) -> Option<Vec<u8>> {
+      match command {
+         Command::DATA {blocknum: _blknum, data: _data} => {
+            return Some(_data);
+         },    
+         _ => {return None;}
+      }
+   }
+      
+   pub fn recv(buf: &[u8], size: usize) -> Command {
       let mut reader = Cursor::new(buf);
       // Todo, handle Errors without panic!
       let opcode = Opcode::try_from(reader.read_u16::<BigEndian>().unwrap()).unwrap();
-      let command = parse_command(opcode, reader);
+      return parse_command(opcode, &mut reader);
    }
 
-
-
-
-   
 }

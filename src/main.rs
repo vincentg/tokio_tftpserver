@@ -29,7 +29,11 @@ impl Server {
 
         loop {
             if let Some((size, peer)) = to_send {
-                TFTPProtocol::recv(&buf[..size],size);
+                let received_command = TFTPProtocol::recv(&buf[..size],size);
+                // Todo use patern matching / Error management
+                let reply_to_send = TFTPProtocol::getReplyCommand(received_command, None).unwrap();
+                let to_send = TFTPProtocol::getBufferForCommand(reply_to_send).unwrap();
+                socket.send_to(&to_send, &peer).await?;
             }
            
             to_send = Some(socket.recv_from(&mut buf).await?);

@@ -1,4 +1,4 @@
-pub mod TFTPProtocol {
+pub mod tftpprotocol {
    use std::io::Cursor;
    use std::io::BufRead;
    use std::io::Read;
@@ -53,6 +53,8 @@ pub mod TFTPProtocol {
              // First buffer was moved above, create buffer for Mode
              let mut _mode_buf = vec![0; 254];
              let _mode_read = reader.read_until(0, &mut _mode_buf).unwrap();
+             // !! TODO See why resulting vector have zeros bytes !!
+             _mode_buf.retain(|&x| x != 0);
              
              let _mode = String::from_utf8(_mode_buf).unwrap();
              println!("FileName: {}, Mode: {}",_filename, _mode);
@@ -121,3 +123,24 @@ pub mod TFTPProtocol {
    }
 
 }
+
+#[cfg(test)]
+mod test {
+    use crate::tftpprotocol::*;
+    
+    #[test]
+    fn recv_rrq() {
+			// 0 1 in big endian + Filename + 0 + mode + 0
+        let rrq: [u8; 18] = [0, 1, b'f',b'i',b'l',b'e',b'n',b'm',
+                             0, b'n',b'e',b't',b'a',b's',b'c',b'i',b'i',0];
+        match recv(&rrq,18) {
+           Command::RRQ{ filename: _filename, mode: _mode } => { 
+              assert_eq!(_filename,"filenm");
+              assert_eq!(_mode,"netascii");
+           }
+           _ => { panic!("RECV with 0 1 optype must return RRQ command");}
+        }
+    }
+
+}
+

@@ -134,7 +134,8 @@ mod test {
         let rrq: [u8; 18] = [0, 1, b'f',b'i',b'l',b'e',b'n',b'm',
                              0, b'n',b'e',b't',b'a',b's',b'c',b'i',b'i',0];
         match recv(&rrq,18) {
-           Command::RRQ{ filename: _filename, mode: _mode } => { 
+           Command::RRQ{ filename: _filename, mode: _mode } => {
+              // Got good command, check parsing is OK
               assert_eq!(_filename,"filenm");
               assert_eq!(_mode,"netascii");
            }

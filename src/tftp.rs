@@ -52,20 +52,19 @@ pub mod tftpprotocol {
 
       // Inner function for RRQ/WRQ shared parsing logic 
       fn parse_filename_mode(reader: &mut Cursor<&[u8]>) -> (String,String) {
-         let mut _buffer = vec![0; 1024];
-         let _file_read = reader.read_until(0, &mut _buffer).unwrap();
-         // !! TODO See why resulting vector have zeros bytes !!
-         _buffer.retain(|&x| x != 0);
+         let mut buffer: Vec<u8> = Vec::new();
+         reader.read_until(0, &mut buffer).unwrap();
+         // Remove delimiter (\0)
+         buffer.pop();
          // Todo Manage Error
-         let _filename = String::from_utf8(_buffer).unwrap();
+         let filename = String::from_utf8(buffer).unwrap();
          // First buffer was moved above, create buffer for Mode
-         let mut _mode_buf = vec![0; 254];
-         let _mode_read = reader.read_until(0, &mut _mode_buf).unwrap();
-         // !! TODO See why resulting vector have zeros bytes !!
-         _mode_buf.retain(|&x| x != 0);
-         let _mode = String::from_utf8(_mode_buf).unwrap();
+         let mut _mode_buf: Vec<u8> = Vec::new();
+         reader.read_until(0, &mut _mode_buf).unwrap();
+         _mode_buf.pop();
+         let mode = String::from_utf8(_mode_buf).unwrap();
    
-         return (_filename,_mode);
+         return (filename, mode);
       }
 
       match opcode {
@@ -89,12 +88,11 @@ pub mod tftpprotocol {
          Opcode::ERROR => {
             println!("ERROR");
             let errcode = reader.read_u16::<BigEndian>().unwrap();
-            let mut _buffer = vec![0; 1024];
-            let _error_read = reader.read_until(0, &mut _buffer).unwrap();
-            // !! TODO See why resulting vector have zeros bytes !!
-            _buffer.retain(|&x| x != 0);
+            let mut buffer: Vec<u8> = Vec::new();
+            let _error_read = reader.read_until(0, &mut buffer).unwrap();
+            buffer.pop();
             // Todo Manage Error
-            let error = String::from_utf8(_buffer).unwrap();
+            let error = String::from_utf8(buffer).unwrap();
             return Command::ERROR{errorcode:errcode, errmsg: error};
          }
 
@@ -110,8 +108,8 @@ pub mod tftpprotocol {
 
    pub fn get_reply_command(command: Command, filename:Option<String>) -> Option<Command> {
       match command {
-         Command::RRQ { filename: _filename, mode: _mode } => {
-            return Some(prepare_data(_filename, 1, _mode));            
+         Command::RRQ { filename: filenm, mode: _mode } => {
+            return Some(prepare_data(filenm, 1, _mode));            
          },
          _ => {
             println!("Not Implemented");
@@ -170,9 +168,9 @@ mod test {
         let rrq: [u8; 18] = [0, 1, b'f',b'i',b'l',b'e',b'n',b'm',
                              0, b'n',b'e',b't',b'a',b's',b'c',b'i',b'i',0];
         match recv(&rrq,18) {
-           Command::RRQ{ filename: _filename, mode: _mode } => {
+           Command::RRQ{ filename: filenm, mode: _mode } => {
               // Got good command, check parsing is OK
-              assert_eq!(_filename,"filenm");
+              assert_eq!(filenm,"filenm");
               assert_eq!(_mode,"netascii");
            }
            _ => { panic!("RECV with 0 1 optype must return RRQ command");}
@@ -185,9 +183,9 @@ mod test {
         let wrq: [u8; 18] = [0, 2, b'f',b'i',b'l',b'e',b'n',b'm',
                              0, b'n',b'e',b't',b'a',b's',b'c',b'i',b'i',0];
         match recv(&wrq,18) {
-           Command::WRQ{ filename: _filename, mode: _mode } => {
+           Command::WRQ{ filename: filenm, mode: _mode } => {
               // Got good command, check parsing is OK
-              assert_eq!(_filename,"filenm");
+              assert_eq!(filenm,"filenm");
               assert_eq!(_mode,"netascii");
            }
            _ => { panic!("RECV with 0 2 optype must return WRQ command");}

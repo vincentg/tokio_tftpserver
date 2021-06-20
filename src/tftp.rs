@@ -48,24 +48,26 @@ pub mod tftpprotocol {
    }
 
 
-   fn parse_filename_mode(reader: &mut Cursor<&[u8]>) -> (String,String) {
-      let mut _buffer = vec![0; 1024];
-      let _file_read = reader.read_until(0, &mut _buffer).unwrap();
-      // !! TODO See why resulting vector have zeros bytes !!
-      _buffer.retain(|&x| x != 0);
-      // Todo Manage Error
-      let _filename = String::from_utf8(_buffer).unwrap();
-      // First buffer was moved above, create buffer for Mode
-      let mut _mode_buf = vec![0; 254];
-      let _mode_read = reader.read_until(0, &mut _mode_buf).unwrap();
-      // !! TODO See why resulting vector have zeros bytes !!
-      _mode_buf.retain(|&x| x != 0);
-      let _mode = String::from_utf8(_mode_buf).unwrap();
-
-      return (_filename,_mode);
-   }
-
    fn parse_command(opcode: Opcode, reader: &mut Cursor<&[u8]>) -> Command {
+
+      // Inner function for RRQ/WRQ shared parsing logic 
+      fn parse_filename_mode(reader: &mut Cursor<&[u8]>) -> (String,String) {
+         let mut _buffer = vec![0; 1024];
+         let _file_read = reader.read_until(0, &mut _buffer).unwrap();
+         // !! TODO See why resulting vector have zeros bytes !!
+         _buffer.retain(|&x| x != 0);
+         // Todo Manage Error
+         let _filename = String::from_utf8(_buffer).unwrap();
+         // First buffer was moved above, create buffer for Mode
+         let mut _mode_buf = vec![0; 254];
+         let _mode_read = reader.read_until(0, &mut _mode_buf).unwrap();
+         // !! TODO See why resulting vector have zeros bytes !!
+         _mode_buf.retain(|&x| x != 0);
+         let _mode = String::from_utf8(_mode_buf).unwrap();
+   
+         return (_filename,_mode);
+      }
+
       match opcode {
          Opcode::RRQ => {
              println!("Read");
@@ -78,7 +80,13 @@ pub mod tftpprotocol {
             let (filename, mode) = parse_filename_mode(reader);
             println!("FileName: {}, Mode: {}",filename, mode);
             return Command::WRQ{filename: filename, mode: mode};
+         },
+         Opcode::ACK => {
+            println!("ACK");
+            let _ack_num = reader.read_u16::<BigEndian>().unwrap();
+            return Command::ACK{blocknum: _ack_num};
          }
+
          _ => {
             println!("Other Opcode");
             return Command::ERROR{errorcode :1, errmsg:"NOT IMPLEMENTED".to_string()};
@@ -173,6 +181,19 @@ mod test {
            _ => { panic!("RECV with 0 2 optype must return WRQ command");}
         }
     }
+
+    #[test]
+    fn recv_ack() {
+      // 0 4 in big endian + 2 bytes ACK number in Big Endian
+      let ack: [u8; 4] = [0, 4, 0xab, 0xcd];
+      match recv(&ack,4) {
+         Command::ACK{ blocknum: blknum } => {
+            // Got good command, check parsing is OK
+            assert_eq!(blknum,0xabcd);
+         }
+         _ => { panic!("ACK with 0 4 + 0xabcd optype must return ACK 0xabcd blocknum");}
+      }
+     }
 
     #[test]
     fn recv_invalid() {

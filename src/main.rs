@@ -31,8 +31,8 @@ impl Server {
             if let Some((size, peer)) = to_send {
                 let received_command = tftpprotocol::recv(&buf[..size],size);
                 // Todo use patern matching / Error management
-                let reply_to_send = tftpprotocol::getReplyCommand(received_command, None).unwrap();
-                let to_send = tftpprotocol::getBufferForCommand(reply_to_send).unwrap();
+                let reply_to_send = tftpprotocol::get_reply_command(received_command, None).unwrap();
+                let to_send = tftpprotocol::get_buffer_for_command(reply_to_send).unwrap();
                 socket.send_to(&to_send, &peer).await?;
             }
            

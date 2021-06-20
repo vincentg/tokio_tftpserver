@@ -85,11 +85,23 @@ pub mod tftpprotocol {
             println!("ACK");
             let _ack_num = reader.read_u16::<BigEndian>().unwrap();
             return Command::ACK{blocknum: _ack_num};
+         },
+         Opcode::ERROR => {
+            println!("ERROR");
+            let errcode = reader.read_u16::<BigEndian>().unwrap();
+            let mut _buffer = vec![0; 1024];
+            let _error_read = reader.read_until(0, &mut _buffer).unwrap();
+            // !! TODO See why resulting vector have zeros bytes !!
+            _buffer.retain(|&x| x != 0);
+            // Todo Manage Error
+            let error = String::from_utf8(_buffer).unwrap();
+            return Command::ERROR{errorcode:errcode, errmsg: error};
          }
 
          _ => {
             println!("Other Opcode");
             return Command::ERROR{errorcode :1, errmsg:"NOT IMPLEMENTED".to_string()};
+            
          }
             
       }
@@ -194,6 +206,20 @@ mod test {
          _ => { panic!("ACK with 0 4 + 0xabcd optype must return ACK 0xabcd blocknum");}
       }
      }
+
+     #[test]
+     fn recv_error() {
+       // 0 4 in big endian + 2 bytes ACK number in Big Endian
+       let error: [u8; 10] = [0, 5, 0xab, 0xcd, b'a',b'b',b'c',b'd',b'!',0];
+       match recv(&error,10) {
+          Command::ERROR{ errorcode: code, errmsg: msg} => {
+             // Got good command, check parsing is OK
+             assert_eq!(code,0xabcd);
+             assert_eq!(msg,"abcd!");
+          }
+          _ => { panic!("ERROR with code abcd +  message \"abcd!\" was not correctly parsed");}
+       }
+      }     
 
     #[test]
     fn recv_invalid() {

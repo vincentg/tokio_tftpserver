@@ -27,17 +27,21 @@ impl Server {
             mut to_send,
         } = self;
 
+        let mut context = None;
         loop {
             if let Some((size, peer)) = to_send {
-                let received_command = tftpprotocol::recv(&buf[..size],size);
-                // Todo use patern matching / Error management
-                let reply_to_send = tftpprotocol::get_reply_command(received_command, None).unwrap();
-                let to_send = tftpprotocol::get_buffer_for_command(reply_to_send).unwrap();
-                socket.send_to(&to_send, &peer).await?;
+                let new_context = tftpprotocol::recv(&buf[..size],size, context);
+                context = new_context.clone();
+                match new_context {
+                    Some(ctx) => {
+                        let reply_to_send = tftpprotocol::get_reply_command(ctx).unwrap();
+                        let send = tftpprotocol::get_buffer_for_command(reply_to_send).unwrap();
+                        socket.send_to(&send, &peer).await?;
+                    }
+                    None => {return Ok(())}
+                }
             }
-           
             to_send = Some(socket.recv_from(&mut buf).await?);
-
         }
     }
 }

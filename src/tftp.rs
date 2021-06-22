@@ -6,6 +6,9 @@ pub mod tftpprotocol {
    use byteorder::{ReadBytesExt,WriteBytesExt};
    use std::convert::TryFrom;
    use std::fs::File;
+   use std::io::Seek;
+   use std::io::SeekFrom;
+
 
    
    enum Opcode {
@@ -32,6 +35,7 @@ pub mod tftpprotocol {
       }
    }
 
+   #[derive(Debug, Clone)]
    pub enum Command {
       RRQ  {filename : String, mode:String},
       WRQ  {filename : String, mode:String},
@@ -40,11 +44,32 @@ pub mod tftpprotocol {
       ERROR {errorcode :u16, errmsg:String}
    }
 
-   struct OpContext {
-      current_op : Command,  // RRQ or WRQ
+   #[derive(Debug, Clone)]
+   pub struct OpContext {
+      pub current_op : Command,  // RRQ or WRQ
+      pub reply_to_send : Option<Command>,
       block_num : u16,       // For RRQ last read block, for WRQ, last written
       ack_num   : u16,       // last ACK received (to detect timeout)
-      openfile : Option<std::fs::File> // keep file descriptor/open_file
+      filename  : String,
+      mode      : String
+
+   }
+
+   fn build_new_context(current_op: Command) -> Option<OpContext> {
+      // TODO find how to do that without clone 
+      let saved_op = current_op.clone();
+      match current_op {
+         Command::RRQ{filename, mode} | Command::WRQ{filename, mode} =>
+             return Some( OpContext {
+               current_op: saved_op,
+               reply_to_send : None,
+               block_num:0,
+               ack_num:0,
+               filename:filename.clone(),
+               mode:mode.clone()
+            }),
+         _ => return None
+      }     
    }
 
 
@@ -78,12 +103,12 @@ pub mod tftpprotocol {
             println!("Write");
             let (filename, mode) = parse_filename_mode(reader);
             println!("FileName: {}, Mode: {}",filename, mode);
-            return Command::WRQ{filename: filename, mode: mode};
+            return Command::WRQ{filename, mode};
          },
          Opcode::ACK => {
-            println!("ACK");
-            let _ack_num = reader.read_u16::<BigEndian>().unwrap();
-            return Command::ACK{blocknum: _ack_num};
+            let blocknum = reader.read_u16::<BigEndian>().unwrap();
+            println!("ACK {}",blocknum);
+            return Command::ACK{blocknum};
          },
          Opcode::ERROR => {
             println!("ERROR");
@@ -99,18 +124,20 @@ pub mod tftpprotocol {
          _ => {
             println!("Other Opcode");
             return Command::ERROR{errorcode :1, errmsg:"NOT IMPLEMENTED".to_string()};
-            
          }
             
       }
 
    }
 
-   pub fn get_reply_command(command: Command, filename:Option<String>) -> Option<Command> {
-      match command {
-         Command::RRQ { filename: filenm, mode: _mode } => {
-            return Some(prepare_data(filenm, 1, _mode));            
+   pub fn get_reply_command(context:OpContext) -> Option<Command> {
+      match context.current_op {
+         Command::RRQ { .. } => {
+            return Some(prepare_data(context.filename, 1, context.mode));
          },
+         Command::ACK {blocknum} => {
+            return Some(prepare_data(context.filename, blocknum+1, context.mode));
+         }
          _ => {
             println!("Not Implemented");
             return None;
@@ -121,8 +148,10 @@ pub mod tftpprotocol {
 
    fn prepare_data(filename :String, blocknum: u16, mode: String) -> Command {
       // Todo manage error
-      println!("OPENING FILE: FileName: {} (len:{}), Mode: {}(len:{}), ",filename,filename.len(), mode, mode.len());
+      println!("OPENING FILE: FileName: {} (len:{}), Mode: {}(len:{}), block:{} ",filename,filename.len(), mode, mode.len(), blocknum);
       let mut f = File::open(filename).unwrap();
+      let blknum64 = blocknum as u64;
+      f.seek(SeekFrom::Start((blknum64-1)*512)).unwrap();
       // TFTP Protocol define a max size of 512 bytes.
       // First two bytes is the u16 chuck num
       let writer = vec![0;516];
@@ -135,6 +164,7 @@ pub mod tftpprotocol {
       //let sz = f.read(&mut writer[4..]).unwrap();
       let sz = f.read(&mut cursor_writer.get_mut()[4..]).unwrap();
       // Check sz
+      println!("READ SZ: {}", sz);
 
       return Command::DATA{blocknum: blocknum, data: cursor_writer.get_ref()[0..sz+4].to_vec()}
    }
@@ -147,8 +177,40 @@ pub mod tftpprotocol {
          _ => {return None;}
       }
    }
+
+   pub fn recv(buf: &[u8], size: usize, prev_ctx: Option<OpContext>) -> Option<OpContext> {
+      let recv_cmd = process_buffer(buf,size);
+      match prev_ctx{
+         Some(ctx) => {
+            // Allow Continuation of RRQ, other cases return None/NO-OP
+            match recv_cmd {
+               Command::ACK{ blocknum: blknum } => {
+                  match ctx.current_op {
+                     Command::RRQ{..} | Command::ACK{..} => {
+                        print!("ACK {} Post RRQ", blknum);
+                        let mut new_ctx = ctx;
+                        new_ctx.ack_num = blknum;
+                        new_ctx.current_op = recv_cmd;
+                        return Some(new_ctx);
+                     }
+                     _ => {print!("Orphan ACK, ignore"); return None;}
+                  }
+               },
+               Command::DATA{..} => {print!("TODO/Implement WRQ"); return None;},
+               Command::ERROR{errorcode, errmsg} => {
+                  eprint!("Aborting command, received from client error {} with message {}",errorcode,errmsg);
+                  return None;
+               },
+               // Other commands create new context (RRQ/WRQ)
+               _ => {return build_new_context(recv_cmd);}
+            }
+         },
+         // No Previous operations, create new for required commands, ignore orphans ones
+         None => return build_new_context(recv_cmd)
+      }
+   }
       
-   pub fn recv(buf: &[u8], size: usize) -> Command {
+   pub fn process_buffer(buf: &[u8], size: usize) -> Command {
       let mut reader = Cursor::new(buf);
       // Todo, handle Errors without panic!
       let opcode = Opcode::try_from(reader.read_u16::<BigEndian>().unwrap()).unwrap();
@@ -167,7 +229,7 @@ mod test {
         // 0 1 in big endian + Filename + 0 + mode + 0
         let rrq: [u8; 18] = [0, 1, b'f',b'i',b'l',b'e',b'n',b'm',
                              0, b'n',b'e',b't',b'a',b's',b'c',b'i',b'i',0];
-        match recv(&rrq,18) {
+        match process_buffer(&rrq,18) {
            Command::RRQ{ filename: filenm, mode: _mode } => {
               // Got good command, check parsing is OK
               assert_eq!(filenm,"filenm");
@@ -182,7 +244,7 @@ mod test {
         // 0 2 in big endian + Filename + 0 + mode + 0
         let wrq: [u8; 18] = [0, 2, b'f',b'i',b'l',b'e',b'n',b'm',
                              0, b'n',b'e',b't',b'a',b's',b'c',b'i',b'i',0];
-        match recv(&wrq,18) {
+        match process_buffer(&wrq,18) {
            Command::WRQ{ filename: filenm, mode: _mode } => {
               // Got good command, check parsing is OK
               assert_eq!(filenm,"filenm");
@@ -196,7 +258,7 @@ mod test {
     fn recv_ack() {
       // 0 4 in big endian + 2 bytes ACK number in Big Endian
       let ack: [u8; 4] = [0, 4, 0xab, 0xcd];
-      match recv(&ack,4) {
+      match process_buffer(&ack,4) {
          Command::ACK{ blocknum: blknum } => {
             // Got good command, check parsing is OK
             assert_eq!(blknum,0xabcd);
@@ -209,7 +271,7 @@ mod test {
      fn recv_error() {
        // 0 4 in big endian + 2 bytes ACK number in Big Endian
        let error: [u8; 10] = [0, 5, 0xab, 0xcd, b'a',b'b',b'c',b'd',b'!',0];
-       match recv(&error,10) {
+       match process_buffer(&error,10) {
           Command::ERROR{ errorcode: code, errmsg: msg} => {
              // Got good command, check parsing is OK
              assert_eq!(code,0xabcd);
@@ -223,7 +285,7 @@ mod test {
     fn recv_invalid() {
        // Invalid Opcode
        let invalid: [u8; 3] = [9,9,9];
-       assert!(matches!(recv(&invalid, 3), Command::ERROR{..}));
+       assert!(matches!(process_buffer(&invalid, 3), Command::ERROR{..}));
     }
 
 }

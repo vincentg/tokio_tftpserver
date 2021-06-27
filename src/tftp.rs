@@ -2,10 +2,12 @@ pub mod tftpprotocol {
    use std::io::Cursor;
    use std::io::BufRead;
    use std::io::Read;
+   use std::io::Write;
    use byteorder::{BigEndian};
    use byteorder::{ReadBytesExt,WriteBytesExt};
    use std::convert::TryFrom;
    use std::fs::File;
+   use std::fs::OpenOptions;
    use std::io::Seek;
    use std::io::SeekFrom;
 
@@ -117,6 +119,14 @@ pub mod tftpprotocol {
             let error = String::from_utf8(buffer).unwrap();
             return Command::ERROR{errorcode:errcode, errmsg: error};
          }
+         Opcode::DATA => {
+            println!("DATA");
+            let blocknum = reader.read_u16::<BigEndian>().unwrap();
+            let mut buf: [u8; 512] = [0;512];
+            let n = reader.read(&mut buf).unwrap();
+            println!("Blknum: {}, len: {}",blocknum,n);
+            return Command::DATA{blocknum, data: buf[0..n].to_vec()};
+         },
 
          _ => {
             println!("Other Opcode");
@@ -130,11 +140,17 @@ pub mod tftpprotocol {
    pub fn get_reply_command(context:OpContext) -> Option<Command> {
       match context.current_op {
          Command::RRQ { .. } => {
-            return Some(prepare_data(context.filename, 1, context.mode));
+            return Some(prepare_data_reply(context.filename, 1, context.mode));
+         },
+         Command::WRQ { .. } => {
+            return Some(Command::ACK{blocknum:0});
          },
          Command::ACK {blocknum} => {
-            return Some(prepare_data(context.filename, blocknum+1, context.mode));
-         }
+            return Some(prepare_data_reply(context.filename, blocknum+1, context.mode));
+         },
+         Command::DATA{blocknum, data} => {
+            return Some(prepare_ack_reply(context.filename, blocknum, context.mode, data));
+         },
          _ => {
             println!("Not Implemented");
             return None;
@@ -143,7 +159,29 @@ pub mod tftpprotocol {
       
    }
 
-   fn prepare_data(filename :String, blocknum: u16, mode: String) -> Command {
+   fn prepare_ack_reply(filename :String, blocknum: u16, mode: String, data: Vec<u8>) -> Command {
+      // Todo manage error
+      println!("OPENING FILE: FileName: {} (len:{}), Mode: {}(len:{}), block:{} ",filename,filename.len(), mode, mode.len(), blocknum);
+      //let mut f = OpenOptions::new().write(true).create(true).open(filename).unwrap();
+      let mut f : File;
+
+      if blocknum == 1 {
+         f = File::create(filename).unwrap();
+      } else {
+         f = OpenOptions::new().write(true).create(true).open(filename).unwrap();
+         let blknum64 = blocknum as u64; //safe upsizing for below multiplication
+         f.seek(SeekFrom::Start((blknum64-1)*512)).unwrap();
+      }
+
+      f.write(&data).unwrap();
+      
+      // Todo Handle write error and respond Command:ERROR if so
+      
+
+      return Command::ACK{blocknum: blocknum};
+   }
+
+   fn prepare_data_reply(filename :String, blocknum: u16, mode: String) -> Command {
       // Todo manage error
       println!("OPENING FILE: FileName: {} (len:{}), Mode: {}(len:{}), block:{} ",filename,filename.len(), mode, mode.len(), blocknum);
       let mut f = File::open(filename).unwrap();
@@ -164,9 +202,17 @@ pub mod tftpprotocol {
 
    pub fn get_buffer_for_command(command: Command) -> Option<Vec<u8>> {
       match command {
-         Command::DATA {blocknum: _blknum, data: _data} => {
-            return Some(_data);
-         },    
+         Command::DATA {blocknum: _, data} => {
+            return Some(data);
+         },
+         Command::ACK {blocknum} => {
+            // u16 to two Big Endian bytes
+            let beblocknum = blocknum.to_be_bytes();
+            // Todo use enum ACK value and be_bytes
+            let result=vec![0,4,beblocknum[0],beblocknum[1]];
+            return Some(result);
+         }
+
          _ => {return None;}
       }
    }
@@ -177,19 +223,18 @@ pub mod tftpprotocol {
          Some(ctx) => {
             // Allow Continuation of RRQ, other cases return None/NO-OP
             match recv_cmd {
-               Command::ACK{ blocknum: blknum } => {
+               Command::ACK{ blocknum } | Command::DATA{blocknum, data:_} => {
                   match ctx.current_op {
-                     Command::RRQ{..} | Command::ACK{..} => {
-                        print!("ACK {} Post RRQ", blknum);
+                     Command::RRQ{..} | Command::ACK{..} | Command::WRQ{..}| Command::DATA{..} => {
+                        print!("ACK/DATA {} Post RRQ/WRQ", blocknum);
                         let mut new_ctx = ctx;
-                        new_ctx.ack_num = blknum;
+                        new_ctx.ack_num = blocknum;
                         new_ctx.current_op = recv_cmd;
                         return Some(new_ctx);
                      }
                      _ => {print!("Orphan ACK, ignore"); return None;}
                   }
                },
-               Command::DATA{..} => {print!("TODO/Implement WRQ"); return None;},
                Command::ERROR{errorcode, errmsg} => {
                   eprint!("Aborting command, received from client error {} with message {}",errorcode,errmsg);
                   return None;
@@ -223,10 +268,10 @@ mod test {
         let rrq: [u8; 18] = [0, 1, b'f',b'i',b'l',b'e',b'n',b'm',
                              0, b'n',b'e',b't',b'a',b's',b'c',b'i',b'i',0];
         match process_buffer(&rrq,18) {
-           Command::RRQ{ filename: filenm, mode: _mode } => {
+           Command::RRQ{ filename, mode } => {
               // Got good command, check parsing is OK
-              assert_eq!(filenm,"filenm");
-              assert_eq!(_mode,"netascii");
+              assert_eq!(filename,"filenm");
+              assert_eq!(mode,"netascii");
            }
            _ => { panic!("RECV with 0 1 optype must return RRQ command");}
         }
@@ -238,10 +283,10 @@ mod test {
         let wrq: [u8; 18] = [0, 2, b'f',b'i',b'l',b'e',b'n',b'm',
                              0, b'n',b'e',b't',b'a',b's',b'c',b'i',b'i',0];
         match process_buffer(&wrq,18) {
-           Command::WRQ{ filename: filenm, mode: _mode } => {
+           Command::WRQ{ filename, mode } => {
               // Got good command, check parsing is OK
-              assert_eq!(filenm,"filenm");
-              assert_eq!(_mode,"netascii");
+              assert_eq!(filename,"filenm");
+              assert_eq!(mode,"netascii");
            }
            _ => { panic!("RECV with 0 2 optype must return WRQ command");}
         }
@@ -252,9 +297,9 @@ mod test {
       // 0 4 in big endian + 2 bytes ACK number in Big Endian
       let ack: [u8; 4] = [0, 4, 0xab, 0xcd];
       match process_buffer(&ack,4) {
-         Command::ACK{ blocknum: blknum } => {
+         Command::ACK{ blocknum } => {
             // Got good command, check parsing is OK
-            assert_eq!(blknum,0xabcd);
+            assert_eq!(blocknum,0xabcd);
          }
          _ => { panic!("ACK with 0 4 + 0xabcd optype must return ACK 0xabcd blocknum");}
       }
@@ -265,14 +310,28 @@ mod test {
        // 0 4 in big endian + 2 bytes ACK number in Big Endian
        let error: [u8; 10] = [0, 5, 0xab, 0xcd, b'a',b'b',b'c',b'd',b'!',0];
        match process_buffer(&error,10) {
-          Command::ERROR{ errorcode: code, errmsg: msg} => {
+          Command::ERROR{ errorcode, errmsg} => {
              // Got good command, check parsing is OK
-             assert_eq!(code,0xabcd);
-             assert_eq!(msg,"abcd!");
+             assert_eq!(errorcode,0xabcd);
+             assert_eq!(errmsg,"abcd!");
           }
           _ => { panic!("ERROR with code abcd +  message \"abcd!\" was not correctly parsed");}
        }
-      }     
+      }
+
+      #[test]
+      fn recv_data() {
+         // 0 3 in big endian + 2 bytes Block number in Big Endian + Data
+         let data: [u8; 9] = [0, 3, 0xab, 0xcd, b'a',b'b',b'c',b'd',b'!'];
+         match process_buffer(&data,10) {
+            Command::DATA{ blocknum, data} => {
+               // Got good command, check parsing is OK
+               assert_eq!(blocknum,0xabcd);
+               assert_eq!(data,[b'a',b'b',b'c',b'd',b'!']);
+            }
+            _ => { panic!("DATA with blknum abcd +  data \"abcd!\" was not correctly parsed");}
+         }
+        }     
 
     #[test]
     fn recv_invalid() {

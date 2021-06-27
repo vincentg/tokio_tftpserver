@@ -8,6 +8,8 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::{env, io};
 use tokio::net::UdpSocket;
+
+#[cfg(unix)]
 use privdrop;
 
 mod tftp;
@@ -54,13 +56,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let socket = UdpSocket::bind(&addr).await?;
     println!("Listening on: {}", socket.local_addr()?);
+    
+    #[cfg(unix)]
     println!("Dropping privileges");
 
+    #[cfg(unix)]
     privdrop::PrivDrop::default()
         .chroot("/home/vgerard") // todo parse arguments
         .user("vgerard")
         .apply()
         .unwrap_or_else(|e| { panic!("Failed to drop privileges: {}", e) });
+    
 
     let server = Server {
         socket,

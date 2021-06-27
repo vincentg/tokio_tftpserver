@@ -9,8 +9,6 @@ pub mod tftpprotocol {
    use std::io::Seek;
    use std::io::SeekFrom;
 
-
-   
    enum Opcode {
        RRQ = 1, // Read request
        WRQ = 2, // Write request
@@ -52,7 +50,6 @@ pub mod tftpprotocol {
       ack_num   : u16,       // last ACK received (to detect timeout)
       filename  : String,
       mode      : String
-
    }
 
    fn build_new_context(current_op: Command) -> Option<OpContext> {
@@ -65,8 +62,8 @@ pub mod tftpprotocol {
                reply_to_send : None,
                block_num:0,
                ack_num:0,
-               filename:filename.clone(),
-               mode:mode.clone()
+               filename,
+               mode
             }),
          _ => return None
       }     
@@ -150,7 +147,7 @@ pub mod tftpprotocol {
       // Todo manage error
       println!("OPENING FILE: FileName: {} (len:{}), Mode: {}(len:{}), block:{} ",filename,filename.len(), mode, mode.len(), blocknum);
       let mut f = File::open(filename).unwrap();
-      let blknum64 = blocknum as u64;
+      let blknum64 = blocknum as u64; //safe upsizing for below multiplication
       f.seek(SeekFrom::Start((blknum64-1)*512)).unwrap();
       // TFTP Protocol define a max size of 512 bytes.
       // First two bytes is the u16 chuck num
@@ -160,11 +157,7 @@ pub mod tftpprotocol {
       cursor_writer.write_u16::<BigEndian>(3).unwrap();
       cursor_writer.write_u16::<BigEndian>(blocknum).unwrap();
       // Todo manage error 
-      // Todo SPEC GAP read from BlockNum*512
-      //let sz = f.read(&mut writer[4..]).unwrap();
       let sz = f.read(&mut cursor_writer.get_mut()[4..]).unwrap();
-      // Check sz
-      println!("READ SZ: {}", sz);
 
       return Command::DATA{blocknum: blocknum, data: cursor_writer.get_ref()[0..sz+4].to_vec()}
    }

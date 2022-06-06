@@ -229,6 +229,7 @@ pub mod tftpprotocol {
                         print!("ACK/DATA {} Post RRQ/WRQ", blocknum);
                         let mut new_ctx = ctx;
                         new_ctx.ack_num = blocknum;
+                        // TODO Need to only change current op on new base commands WRQ/RRQ
                         new_ctx.current_op = recv_cmd;
                         return Some(new_ctx);
                      }

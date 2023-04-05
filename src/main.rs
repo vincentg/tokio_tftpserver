@@ -6,7 +6,9 @@
 
 use std::error::Error;
 use std::net::SocketAddr;
-use std::{env, io};
+use std::{io,str::FromStr};
+use clap::Parser;
+
 use tokio::net::UdpSocket;
 
 #[cfg(unix)]
@@ -19,6 +21,24 @@ struct Server {
     socket: UdpSocket,
     buf: Vec<u8>,
     to_send: Option<(usize, SocketAddr)>,
+}
+
+#[derive(Parser,Debug)]
+struct Args {
+    #[arg(short,long,default_value_t = std::net::IpAddr::from_str("127.0.0.1").unwrap())]
+    bind: std::net::IpAddr,
+
+    #[arg(short,long,default_value_t = 69)]
+    port: u16,
+
+    #[cfg(unix)]
+    #[arg(short,long,value_name ="USER_TO_DROP_PRIVILEGES_TO")]
+    user: String,
+
+    #[cfg(unix)]
+    #[arg(short,long,value_name ="BASE_DIRECTORY", value_hint = clap::ValueHint::DirPath)]
+    directory: std::path::PathBuf,
+
 }
 
 impl Server {
@@ -38,21 +58,27 @@ impl Server {
                     Some(ctx) => {
                         let reply_to_send = tftpprotocol::get_reply_command(ctx).unwrap();
                         let send = tftpprotocol::get_buffer_for_command(reply_to_send).unwrap();
-                        socket.send_to(&send, &peer).await?;
+                        match socket.send_to(&send, &peer).await {
+                            Err(e) => {println!("Error {e} sending to client")},
+                            Ok(_) => ()
+                        }
                     }
                     None => {return Ok(())}
                 }
             }
-            to_send = Some(socket.recv_from(&mut buf).await?);
+            to_send = Some(match socket.recv_from(&mut buf).await {
+                // Ugly single retry as recv_from sometime fails on Windows
+                Err(_) =>  socket.recv_from(&mut buf).await?,
+                Ok(v) => v
+            });
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let addr = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "127.0.0.1:69".to_string());
+    let args = Args::parse();
+    let addr = format!("{}:{}",args.bind,args.port); 
 
     let socket = UdpSocket::bind(&addr).await?;
     println!("Listening on: {}", socket.local_addr()?);
@@ -62,8 +88,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     #[cfg(unix)]
     privdrop::PrivDrop::default()
-        .chroot("/home/vgerard") // todo parse arguments
-        .user("vgerard")
+        .chroot(args.directory) 
+        .user(args.user)
         .apply()
         .unwrap_or_else(|e| { panic!("Failed to drop privileges: {}", e) });
     

@@ -13,3 +13,11 @@ Options:
   -h, --help
 
 
+On Windows, directory shared will be the current directory
+
+Usage: tokio_tftpserver.exe [OPTIONS]
+
+Options:
+  -b, --bind <BIND>  [default: 127.0.0.1]
+  -p, --port <PORT>  [default: 69]
+  -h, --help         Print help

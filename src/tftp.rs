@@ -48,7 +48,7 @@ pub mod tftpprotocol {
    pub struct OpContext {
       pub current_op : Command,  // RRQ or WRQ
       pub reply_to_send : Option<Command>,
-      block_num : u16,       // For RRQ last read block, for WRQ, last written
+      _block_num : u16,      // For RRQ last read block, for WRQ, last written
       ack_num   : u16,       // last ACK received (to detect timeout)
       filename  : String,
       mode      : String
@@ -62,7 +62,7 @@ pub mod tftpprotocol {
              return Some( OpContext {
                current_op: saved_op,
                reply_to_send : None,
-               block_num:0,
+               _block_num:0,
                ack_num:0,
                filename,
                mode
@@ -249,7 +249,7 @@ pub mod tftpprotocol {
       }
    }
       
-   pub fn process_buffer(buf: &[u8], size: usize) -> Command {
+   pub fn process_buffer(buf: &[u8], _size: usize) -> Command {
       let mut reader = Cursor::new(buf);
       // Todo, handle Errors without panic!
       let opcode = Opcode::try_from(reader.read_u16::<BigEndian>().unwrap()).unwrap();

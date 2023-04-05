@@ -58,12 +58,19 @@ impl Server {
                     Some(ctx) => {
                         let reply_to_send = tftpprotocol::get_reply_command(ctx).unwrap();
                         let send = tftpprotocol::get_buffer_for_command(reply_to_send).unwrap();
-                        socket.send_to(&send, &peer).await?;
+                        match socket.send_to(&send, &peer).await {
+                            Err(e) => {println!("Error {e} sending to client")},
+                            Ok(_) => ()
+                        }
                     }
                     None => {return Ok(())}
                 }
             }
-            to_send = Some(socket.recv_from(&mut buf).await?);
+            to_send = Some(match socket.recv_from(&mut buf).await {
+                // Ugly single retry as recv_from sometime fails on Windows
+                Err(_) =>  socket.recv_from(&mut buf).await?,
+                Ok(v) => v
+            });
         }
     }
 }

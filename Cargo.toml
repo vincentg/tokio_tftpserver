@@ -1,15 +1,15 @@
 [package]
 name = "tokio_tftpserver"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Vincent Gerard <vincent@xenbox.fr>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1.20.4", features = ["full"]}
-byteorder = "1.4.3"
-clap = { version = "4.2.1", features = ["derive"] }
+tokio = { version = "1.33.0", features = ["full"]}
+byteorder = "1.5.0"
+clap = { version = "4.4.7", features = ["derive"] }
 
 [target.'cfg(unix)'.dependencies]
-privdrop = {version = "0.5.0"}
+privdrop = {version = "0.5.4"}

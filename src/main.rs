@@ -52,26 +52,69 @@ impl Server {
         let mut context = None;
         loop {
             if let Some((size, peer)) = to_send {
-                let new_context = tftpprotocol::recv(&buf[..size],size, context);
+                let new_context = tftpprotocol::recv(&buf[..size], size, context);
                 context = new_context.clone();
+                
                 match new_context {
                     Some(ctx) => {
-                        let reply_to_send = tftpprotocol::get_reply_command(ctx).unwrap();
-                        let send = tftpprotocol::get_buffer_for_command(reply_to_send).unwrap();
-                        match socket.send_to(&send, &peer).await {
-                            Err(e) => {println!("Error {e} sending to client")},
-                            Ok(_) => ()
+                        // Valid context - process and send reply
+                        match tftpprotocol::get_reply_command(ctx) {
+                            Some(reply_to_send) => {
+                                match tftpprotocol::get_buffer_for_command(reply_to_send) {
+                                    Some(send) => {
+                                        if let Err(e) = socket.send_to(&send, &peer).await {
+                                            eprintln!("Error {} sending to client {}", e, peer);
+                                        }
+                                    }
+                                    None => {
+                                        eprintln!("Failed to serialize command for client {}", peer);
+                                    }
+                                }
+                            }
+                            None => {
+                                eprintln!("No reply command generated for client {}", peer);
+                            }
                         }
                     }
-                    None => {return Ok(())}
+                    None => {
+                        // Context is None - either client error or end of transfer
+                        // Reset context and continue serving other clients
+                        eprintln!("Transfer ended or error occurred for client {}, ready for new connections", peer);
+                        context = None;
+                    }
                 }
             }
-            to_send = Some(match socket.recv_from(&mut buf).await {
-                // Ugly single retry as recv_from sometime fails on Windows
-                Err(_) =>  socket.recv_from(&mut buf).await?,
-                Ok(v) => v
+            
+            // Continue listening for new packets
+            to_send = Some({
+                let mut retries = 0;
+                const MAX_RETRIES: u32 = 3;
+                loop {
+                    match socket.recv_from(&mut buf).await {
+                        Ok(v) => break v,
+                        Err(e) if retries < MAX_RETRIES && should_retry(&e) => {
+                            retries += 1;
+                            eprintln!("recv_from failed (attempt {}): {}", retries, e);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                        }
+                        Err(e) => {
+                            eprintln!("Fatal recv_from error: {}", e);
+                            return Err(e);
+                        }
+                    }
+                }
             });
         }
+    }
+}
+
+fn should_retry(error: &io::Error) -> bool {
+    match error.kind() {
+        io::ErrorKind::WouldBlock | 
+        io::ErrorKind::TimedOut | 
+        io::ErrorKind::ConnectionReset |
+        io::ErrorKind::Interrupted => true,
+        _ => false,
     }
 }
 

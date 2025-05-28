@@ -109,8 +109,6 @@ impl Server {
 }
 
 fn should_retry(error: &io::Error) -> bool {
-    // Print the error kind for debugging
-    print!("Error kind: {:?}", error.kind());
     match error.kind() {
         io::ErrorKind::WouldBlock | 
         io::ErrorKind::TimedOut | 

@@ -97,7 +97,7 @@ pub mod tftpprotocol {
                 std::io::ErrorKind::PermissionDenied => TftpError::AccessViolation,
                 std::io::ErrorKind::WriteZero | std::io::ErrorKind::UnexpectedEof => TftpError::DiskFull,
                 std::io::ErrorKind::AlreadyExists => TftpError::FileAlreadyExists,
-                _ => TftpError::AccessViolation,
+                _ => TftpError::InternalError,
             }
         }
 
@@ -106,7 +106,7 @@ pub mod tftpprotocol {
             match error.kind() {
                 std::io::ErrorKind::WriteZero | std::io::ErrorKind::UnexpectedEof => TftpError::DiskFull,
                 std::io::ErrorKind::PermissionDenied => TftpError::AccessViolation,
-                _ => TftpError::AccessViolation,
+                _ => TftpError::InternalError,
             }
         }
 
@@ -413,7 +413,7 @@ pub mod tftpprotocol {
                 return match e.kind() {
                     std::io::ErrorKind::UnexpectedEof => TftpError::UnexpectedEof.to_command(),
                     std::io::ErrorKind::PermissionDenied => TftpError::AccessViolation.to_command(),
-                    _ => TftpError::AccessViolation.to_command()
+                    _ => TftpError::InternalError.to_command()
                 };
             }
         };

@@ -8,6 +8,7 @@ use std::error::Error;
 use std::net::SocketAddr;
 use std::{io,str::FromStr};
 use clap::Parser;
+use log::{info, warn, error, debug};
 
 use tokio::net::UdpSocket;
 
@@ -53,34 +54,34 @@ impl Server {
         let mut context = None;
         loop {
             if let Some((size, peer)) = to_send {
+                debug!("Processing packet from {}, size: {}", peer, size);
                 let new_context = tftpprotocol::recv(&buf[..size], size, context);
                 context = new_context.clone();
                 
                 match new_context {
                     Some(ctx) => {
-                        // Valid context - process and send reply
+                        info!("Valid context established for client {}", peer);
                         match tftpprotocol::get_reply_command(ctx) {
                             Some(reply_to_send) => {
                                 match tftpprotocol::get_buffer_for_command(reply_to_send) {
                                     Some(send) => {
+                                        debug!("Sending {} bytes to {}", send.len(), peer);
                                         if let Err(e) = socket.send_to(&send, &peer).await {
-                                            eprintln!("Error {} sending to client {}", e, peer);
+                                            error!("Failed to send response to {}: {}", peer, e);
                                         }
                                     }
                                     None => {
-                                        eprintln!("Failed to serialize command for client {}", peer);
+                                        error!("Failed to serialize command for client {}", peer);
                                     }
                                 }
                             }
                             None => {
-                                eprintln!("No reply command generated for client {}", peer);
+                                warn!("No reply command generated for client {}", peer);
                             }
                         }
                     }
                     None => {
-                        // Context is None - either client error or end of transfer
-                        // Reset context and continue serving other clients
-                        eprintln!("Transfer ended or error occurred for client {}, ready for new connections", peer);
+                        info!("Transfer ended or error occurred for client {}, ready for new connections", peer);
                         context = None;
                     }
                 }
@@ -95,11 +96,11 @@ impl Server {
                         Ok(v) => break v,
                         Err(e) if retries < MAX_RETRIES && should_retry(&e) => {
                             retries += 1;
-                            eprintln!("recv_from failed (attempt {}): {}", retries, e);
+                            warn!("recv_from failed (attempt {}): {}", retries, e);
                             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                         }
                         Err(e) => {
-                            eprintln!("Fatal recv_from error: {}", e);
+                            error!("Fatal recv_from error: {}", e);
                             return Err(e);
                         }
                     }
@@ -121,14 +122,17 @@ fn should_retry(error: &io::Error) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // Initialize logging - set default level to info if RUST_LOG not set
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    
     let args = Args::parse();
     let addr = format!("{}:{}",args.bind,args.port); 
 
     let socket = UdpSocket::bind(&addr).await?;
-    println!("Listening on: {}", socket.local_addr()?);
+    info!("TFTP Server listening on: {}", socket.local_addr()?);
     
     #[cfg(unix)]
-    println!("Dropping privileges");
+    info!("Dropping privileges to user: {}, chroot: {:?}", args.user, args.directory);
 
     #[cfg(unix)]
     privdrop::PrivDrop::default()
@@ -137,6 +141,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .apply()
         .unwrap_or_else(|e| { panic!("Failed to drop privileges: {}", e) });
     
+    #[cfg(unix)]
+    info!("Privileges dropped successfully");
 
     let server = Server {
         socket,
@@ -144,7 +150,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         to_send: None,
     };
 
-    // This starts the server task.
+    info!("Starting TFTP server...");
     server.run().await?;
 
     Ok(())

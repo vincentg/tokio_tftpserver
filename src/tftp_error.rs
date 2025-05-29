@@ -1,4 +1,5 @@
 use crate::tftp::tftpprotocol::Command;
+use log::{warn};
 
 // TFTP Error codes enum for better error handling
 #[derive(Debug, Clone)]
@@ -99,6 +100,25 @@ impl TftpError {
         }
     }
 
+    // Helper to log current operation being aborted
+    pub fn log_aborted_operation(current_op: &Command) {
+        match current_op {
+            Command::RRQ { filename, .. } => {
+                warn!("Aborting read request for file: {}", filename);
+            },
+            Command::WRQ { filename, .. } => {
+                warn!("Aborting write request for file: {}", filename);
+            },
+            Command::DATA { blocknum, .. } => {
+                warn!("Aborting data transfer at block: {}", blocknum);
+            },
+            Command::ACK { blocknum } => {
+                warn!("Aborting transfer after ACK block: {}", blocknum);
+            },
+            _ => warn!("Aborting unknown operation"),
+        }
+    }
+
     // Get descriptive message for client errors (for logging)
     pub fn get_client_error_message(&self, custom_msg: &str) -> String {
         let base_message = format!("Client reports: {}", self.default_message());
@@ -107,25 +127,6 @@ impl TftpError {
             base_message
         } else {
             format!("{} - {}", base_message, custom_msg)
-        }
-    }
-
-    // Helper to log current operation being aborted
-    pub fn log_aborted_operation(current_op: &Command) {
-        match current_op {
-            Command::RRQ { filename, .. } => {
-                eprintln!("Aborting read request for file: {}", filename);
-            },
-            Command::WRQ { filename, .. } => {
-                eprintln!("Aborting write request for file: {}", filename);
-            },
-            Command::DATA { blocknum, .. } => {
-                eprintln!("Aborting data transfer at block: {}", blocknum);
-            },
-            Command::ACK { blocknum } => {
-                eprintln!("Aborting transfer after ACK block: {}", blocknum);
-            },
-            _ => eprintln!("Aborting unknown operation"),
         }
     }
 }

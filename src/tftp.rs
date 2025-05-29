@@ -11,6 +11,7 @@ pub mod tftpprotocol {
     use std::io::Seek;
     use std::io::SeekFrom;
     use crate::tftp_error::TftpError;
+    use log::{info, warn, error, debug};
 
     enum Opcode {
         RRQ = 1, // Read request
@@ -71,7 +72,7 @@ pub mod tftpprotocol {
     }
 
 
-    // Updated parse_command with cleaner error handling
+    // Updated parse_command with logging
     fn parse_command(opcode: Opcode, reader: &mut Cursor<&[u8]>) -> Command {
         // Helper function for safe string parsing
         fn parse_null_terminated_string(reader: &mut Cursor<&[u8]>) -> Result<String, TftpError> {
@@ -95,74 +96,88 @@ pub mod tftpprotocol {
 
         match opcode {
             Opcode::RRQ => {
-                println!("Read");
+                debug!("Processing RRQ packet");
                 match parse_filename_mode(reader) {
                     Ok((filename, mode)) => {
-                        println!("FileName: {}, Mode: {}",filename, mode);
+                        info!("RRQ: filename='{}', mode='{}'", filename, mode);
                         Command::RRQ {filename, mode}
                     }
-                    Err(tftp_error) => tftp_error.to_command()
+                    Err(tftp_error) => {
+                        warn!("Failed to parse RRQ packet: {:?}", tftp_error);
+                        tftp_error.to_command()
+                    }
                 }
             },
             Opcode::WRQ => {
-                println!("Write");
+                debug!("Processing WRQ packet");
                 match parse_filename_mode(reader) {
                     Ok((filename, mode)) => {
-                        println!("FileName: {}, Mode: {}",filename, mode);
+                        info!("WRQ: filename='{}', mode='{}'", filename, mode);
                         Command::WRQ{filename, mode}
                     }
-                    Err(tftp_error) => tftp_error.to_command()
+                    Err(tftp_error) => {
+                        warn!("Failed to parse WRQ packet: {:?}", tftp_error);
+                        tftp_error.to_command()
+                    }
                 }
             },
             Opcode::ACK => {
                 match reader.read_u16::<BigEndian>() {
                     Ok(blocknum) => {
-                        println!("ACK {}",blocknum);
+                        debug!("ACK block {}", blocknum);
                         Command::ACK{blocknum}
                     }
-                    Err(_) => TftpError::MalformedPacket.to_command()
+                    Err(_) => {
+                        warn!("Malformed ACK packet");
+                        TftpError::MalformedPacket.to_command()
+                    }
                 }
             },
             Opcode::ERROR => {
-                println!("ERROR");
+                debug!("Processing ERROR packet");
                 let errcode = match reader.read_u16::<BigEndian>() {
                     Ok(code) => code,
                     Err(_) => {
-                        eprintln!("Malformed ERROR packet - could not read error code");
+                        error!("Malformed ERROR packet - could not read error code");
                         return TftpError::MalformedPacket.to_command()
                     }
                 };
                 
-                // For ERROR packets, try to parse the message but don't fail if it's malformed
                 let error_msg = match parse_null_terminated_string(reader) {
                     Ok(msg) => msg,
                     Err(_) => {
-                        // If we can't parse the error message, use a default but still process the error
-                        eprintln!("Warning: Could not parse error message from client error {}", errcode);
-                        String::new() // Empty string - the client error handling will use default message
+                        warn!("Could not parse error message from client error {}", errcode);
+                        String::new()
                     }
                 };
                 
+                warn!("Client error {}: {}", errcode, error_msg);
                 Command::ERROR{errorcode: errcode, errmsg: error_msg}
             }
             Opcode::DATA => {
-                println!("DATA");
+                debug!("Processing DATA packet");
                 let blocknum = match reader.read_u16::<BigEndian>() {
                     Ok(num) => num,
-                    Err(_) => return TftpError::MalformedPacket.to_command()
+                    Err(_) => {
+                        warn!("Malformed DATA packet - could not read block number");
+                        return TftpError::MalformedPacket.to_command()
+                    }
                 };
                 
                 let mut buf: [u8; 512] = [0;512];
                 let n = match reader.read(&mut buf) {
                     Ok(size) => size,
-                    Err(_) => return TftpError::MalformedPacket.to_command()
+                    Err(_) => {
+                        warn!("Malformed DATA packet - could not read data");
+                        return TftpError::MalformedPacket.to_command()
+                    }
                 };
                 
-                println!("Blknum: {}, len: {}",blocknum,n);
+                debug!("DATA block {}, size {}", blocknum, n);
                 Command::DATA{blocknum, data: buf[0..n].to_vec()}
             },
             _ => {
-                println!("Other Opcode");
+                warn!("Unknown opcode received");
                 TftpError::IllegalOperation.to_command()
             }
         }
@@ -191,27 +206,27 @@ pub mod tftpprotocol {
     }
 
     fn prepare_ack_reply(filename: String, blocknum: u16, mode: String, data: Vec<u8>) -> Command {
-        println!("OPENING FILE: FileName: {} (len:{}), Mode: {}(len:{}), block:{}", 
-                 filename, filename.len(), mode, mode.len(), blocknum);
+        debug!("Preparing ACK reply for file '{}', block {}, data size {}, mode {}",
+               filename, blocknum, data.len(), mode);
         
         let mut f: File;
         
         // Handle file creation/opening based on block number
         if blocknum == 1 {
-            // First block - create new file
+            info!("Creating new file: {}", filename);
             match File::create(&filename) {
                 Ok(file) => f = file,
                 Err(e) => {
-                    eprintln!("Failed to create file {}: {}", filename, e);
+                    error!("Failed to create file '{}': {}", filename, e);
                     return TftpError::from_io_error(&e).to_command();
                 }
             }
         } else {
-            // Subsequent blocks - open existing file for writing
+            debug!("Opening existing file '{}' for writing", filename);
             match OpenOptions::new().write(true).open(&filename) {
                 Ok(file) => f = file,
                 Err(e) => {
-                    eprintln!("Failed to open file {}: {}", filename, e);
+                    error!("Failed to open file {}: {}", filename, e);
                     return TftpError::from_io_error(&e).to_command();
                 }
             }
@@ -219,35 +234,37 @@ pub mod tftpprotocol {
             // Seek to the correct position for this block
             let blknum64 = blocknum as u64;
             if let Err(e) = f.seek(SeekFrom::Start((blknum64 - 1) * 512)) {
-                eprintln!("Failed to seek in file {}: {}", filename, e);
+                error!("Failed to seek in file {}: {}", filename, e);
                 return TftpError::SeekFailed.to_command();
             }
         }
         
         // Write the data to the file
         if let Err(e) = f.write_all(&data) {
-            eprintln!("Failed to write data to file {}: {}", filename, e);
+            error!("Failed to write data to file {}: {}", filename, e);
             return TftpError::from_write_error(&e).to_command();
         }
         
         // Ensure data is written to disk
         if let Err(e) = f.flush() {
-            eprintln!("Failed to flush file {}: {}", filename, e);
+            error!("Failed to flush file {}: {}", filename, e);
             return TftpError::DiskFull.to_command();
         }
         
+        info!("Successfully wrote block {} to file '{}'", blocknum, filename);
         Command::ACK { blocknum }
     }
 
     fn prepare_data_reply(filename: String, blocknum: u16, mode: String) -> Command {
-        println!("OPENING FILE: FileName: {} (len:{}), Mode: {}(len:{}), block:{} ", 
-                 filename, filename.len(), mode, mode.len(), blocknum);
+        debug!("Preparing DATA reply for file '{}', block {}, mode {}", filename, blocknum, mode);
         
-        // Open file with proper error handling
         let mut f = match File::open(&filename) {
-            Ok(file) => file,
+            Ok(file) => {
+                debug!("Successfully opened file '{}'", filename);
+                file
+            },
             Err(e) => {
-                eprintln!("Failed to open file {}: {}", filename, e);
+                error!("Failed to open file '{}': {}", filename, e);
                 return TftpError::from_io_error(&e).to_command();
             }
         };
@@ -255,7 +272,7 @@ pub mod tftpprotocol {
         // Seek to the correct position
         let blknum64 = blocknum as u64;
         if let Err(e) = f.seek(SeekFrom::Start((blknum64 - 1) * 512)) {
-            eprintln!("Failed to seek in file {}: {}", filename, e);
+            error!("Failed to seek in file {}: {}", filename, e);
             return TftpError::SeekFailed.to_command();
         }
     
@@ -266,13 +283,13 @@ pub mod tftpprotocol {
         
         // Write opcode (DATA = 3) with error handling
         if let Err(e) = cursor_writer.write_u16::<BigEndian>(3) {
-            eprintln!("Failed to write opcode: {}", e);
+            error!("Failed to write opcode: {}", e);
             return TftpError::InternalError.to_command();
         }
         
         // Write block number with error handling
         if let Err(e) = cursor_writer.write_u16::<BigEndian>(blocknum) {
-            eprintln!("Failed to write block number: {}", e);
+            error!("Failed to write block number: {}", e);
             return TftpError::InternalError.to_command();
         }
         
@@ -280,7 +297,7 @@ pub mod tftpprotocol {
         let sz = match f.read(&mut cursor_writer.get_mut()[4..]) {
             Ok(size) => size,
             Err(e) => {
-                eprintln!("Failed to read from file {}: {}", filename, e);
+                error!("Failed to read from file {}: {}", filename, e);
                 return match e.kind() {
                     std::io::ErrorKind::UnexpectedEof => TftpError::UnexpectedEof.to_command(),
                     std::io::ErrorKind::PermissionDenied => TftpError::AccessViolation.to_command(),
@@ -289,6 +306,7 @@ pub mod tftpprotocol {
             }
         };
 
+        info!("Successfully read {} bytes from file '{}', block {}", sz, filename, blocknum);
         Command::DATA { 
             blocknum, 
             data: cursor_writer.get_ref()[0..sz + 4].to_vec() 
@@ -332,7 +350,7 @@ pub mod tftpprotocol {
                     Command::ACK { blocknum } | Command::DATA { blocknum, data: _ } => {
                         match ctx.current_op {
                             Command::RRQ { .. } | Command::ACK { .. } | Command::WRQ { .. } | Command::DATA { .. } => {
-                                print!("ACK/DATA {} Post RRQ/WRQ", blocknum);
+                                debug!("ACK/DATA {} Post RRQ/WRQ", blocknum);
                                 let mut new_ctx = ctx;
                                 new_ctx.ack_num = blocknum;
                                 // TODO Need to only change current op on new base commands WRQ/RRQ
@@ -340,7 +358,7 @@ pub mod tftpprotocol {
                                 return Some(new_ctx);
                             }
                             _ => {
-                                print!("Orphan ACK, ignore");
+                                debug!("Orphan ACK, ignore");
                                 return None;
                             }
                         }
@@ -348,7 +366,7 @@ pub mod tftpprotocol {
                     Command::ERROR { errorcode, errmsg } => {
                         // Convert client error to TftpError and use consistent handling
                         let client_error = TftpError::from_error_code(errorcode);
-                        eprintln!("{}", client_error.get_client_error_message(&errmsg));
+                        warn!("{}", client_error.get_client_error_message(&errmsg));
                         
                         // Log the current operation that was aborted
                         TftpError::log_aborted_operation(&ctx.current_op);
@@ -368,7 +386,7 @@ pub mod tftpprotocol {
                     Command::ERROR { errorcode, errmsg } => {
                         // Handle orphan errors using same TftpError logic
                         let client_error = TftpError::from_error_code(errorcode);
-                        eprintln!("Received orphan error from client: {}", 
+                        warn!("Received orphan error from client: {}", 
                                  client_error.get_client_error_message(&errmsg));
                         return None;
                     },
@@ -377,7 +395,7 @@ pub mod tftpprotocol {
             }
         }
     }
-        
+
     pub fn process_buffer(buf: &[u8], _size: usize) -> Command {
         let mut reader = Cursor::new(buf);
         // Todo, handle Errors without panic!

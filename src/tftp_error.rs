@@ -57,7 +57,7 @@ impl TftpError {
     }
 
     // Convert to Command::ERROR for sending
-    pub fn to_command(self) -> Command {
+    pub fn to_command(&self) -> Command {
         Command::ERROR { 
             errorcode: self.error_code(), 
             errmsg: self.default_message() 

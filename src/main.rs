@@ -15,6 +15,7 @@ use tokio::net::UdpSocket;
 use privdrop;
 
 mod tftp;
+mod tftp_error;
 use tftp::tftpprotocol;
 
 struct Server {
